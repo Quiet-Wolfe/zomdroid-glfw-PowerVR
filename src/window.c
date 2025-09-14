@@ -301,7 +301,23 @@ void glfwDefaultWindowHints(void)
 }
 
 GLFWAPI void glfwWindowHint(int hint, int value)
-{
+{-
+    if (hint == GLFW_DEPTH_BITS)
+    {
+        // Intercept the game's request for the depth buffer.
+        // Ignore what it asks for ("value") and force it to 16.
+        _glfw.hints.framebuffer.depthBits = 16;
+        return;
+    }
+
+    if (hint == GLFW_STENCIL_BITS)
+    {
+        // Intercept the game's request for the stencil buffer.
+        // Ignore what it asks for ("value") and force it to 0 (disabled).
+        _glfw.hints.framebuffer.stencilBits = 0;
+        return;
+    }
+
     _GLFW_REQUIRE_INIT();
 
     switch (hint)
@@ -318,129 +334,8 @@ GLFWAPI void glfwWindowHint(int hint, int value)
         case GLFW_ALPHA_BITS:
             _glfw.hints.framebuffer.alphaBits = value;
             return;
-        case GLFW_DEPTH_BITS:
-            _glfw.hints.framebuffer.depthBits = value;
-            return;
-        case GLFW_STENCIL_BITS:
-            _glfw.hints.framebuffer.stencilBits = value;
-            return;
         case GLFW_ACCUM_RED_BITS:
             _glfw.hints.framebuffer.accumRedBits = value;
-            return;
-        case GLFW_ACCUM_GREEN_BITS:
-            _glfw.hints.framebuffer.accumGreenBits = value;
-            return;
-        case GLFW_ACCUM_BLUE_BITS:
-            _glfw.hints.framebuffer.accumBlueBits = value;
-            return;
-        case GLFW_ACCUM_ALPHA_BITS:
-            _glfw.hints.framebuffer.accumAlphaBits = value;
-            return;
-        case GLFW_AUX_BUFFERS:
-            _glfw.hints.framebuffer.auxBuffers = value;
-            return;
-        case GLFW_STEREO:
-            _glfw.hints.framebuffer.stereo = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_DOUBLEBUFFER:
-            _glfw.hints.framebuffer.doublebuffer = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_TRANSPARENT_FRAMEBUFFER:
-            _glfw.hints.framebuffer.transparent = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_SAMPLES:
-            _glfw.hints.framebuffer.samples = value;
-            return;
-        case GLFW_SRGB_CAPABLE:
-            _glfw.hints.framebuffer.sRGB = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_RESIZABLE:
-            _glfw.hints.window.resizable = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_DECORATED:
-            _glfw.hints.window.decorated = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_FOCUSED:
-            _glfw.hints.window.focused = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_AUTO_ICONIFY:
-            _glfw.hints.window.autoIconify = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_FLOATING:
-            _glfw.hints.window.floating = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_MAXIMIZED:
-            _glfw.hints.window.maximized = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_VISIBLE:
-            _glfw.hints.window.visible = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_POSITION_X:
-            _glfw.hints.window.xpos = value;
-            return;
-        case GLFW_POSITION_Y:
-            _glfw.hints.window.ypos = value;
-            return;
-        case GLFW_WIN32_KEYBOARD_MENU:
-            _glfw.hints.window.win32.keymenu = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_WIN32_SHOWDEFAULT:
-            _glfw.hints.window.win32.showDefault = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_COCOA_GRAPHICS_SWITCHING:
-            _glfw.hints.context.nsgl.offline = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_SCALE_TO_MONITOR:
-            _glfw.hints.window.scaleToMonitor = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_SCALE_FRAMEBUFFER:
-        case GLFW_COCOA_RETINA_FRAMEBUFFER:
-            _glfw.hints.window.scaleFramebuffer = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_CENTER_CURSOR:
-            _glfw.hints.window.centerCursor = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_FOCUS_ON_SHOW:
-            _glfw.hints.window.focusOnShow = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_MOUSE_PASSTHROUGH:
-            _glfw.hints.window.mousePassthrough = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_SOFT_FULLSCREEN:
-            _glfw.hints.window.softFullscreen = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_CLIENT_API:
-            _glfw.hints.context.client = value;
-            return;
-        case GLFW_CONTEXT_CREATION_API:
-            _glfw.hints.context.source = value;
-            return;
-        case GLFW_CONTEXT_VERSION_MAJOR:
-            _glfw.hints.context.major = value;
-            return;
-        case GLFW_CONTEXT_VERSION_MINOR:
-            _glfw.hints.context.minor = value;
-            return;
-        case GLFW_CONTEXT_ROBUSTNESS:
-            _glfw.hints.context.robustness = value;
-            return;
-        case GLFW_OPENGL_FORWARD_COMPAT:
-            _glfw.hints.context.forward = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_CONTEXT_DEBUG:
-            _glfw.hints.context.debug = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_CONTEXT_NO_ERROR:
-            _glfw.hints.context.noerror = value ? GLFW_TRUE : GLFW_FALSE;
-            return;
-        case GLFW_OPENGL_PROFILE:
-            _glfw.hints.context.profile = value;
-            return;
-        case GLFW_CONTEXT_RELEASE_BEHAVIOR:
-            _glfw.hints.context.release = value;
-            return;
-        case GLFW_REFRESH_RATE:
-            _glfw.hints.refreshRate = value;
             return;
     }
 

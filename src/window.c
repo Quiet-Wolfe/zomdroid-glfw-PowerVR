@@ -301,28 +301,22 @@ void glfwDefaultWindowHints(void)
 }
 
 GLFWAPI void glfwWindowHint(int hint, int value)
-{
-    // --- POWERVR OPTIMIZATION ---
-    // Prioritize a packed depth/stencil format which is efficient on PowerVR
-    // and should resolve visual glitches seen with a 16-bit depth buffer.
+{-
     if (hint == GLFW_DEPTH_BITS)
     {
-        // Request a 24-bit depth buffer. When combined with an 8-bit stencil
-        // request, this will encourage the driver to select the efficient
-        // GL_DEPTH24_STENCIL8_OES packed format.
-        _glfw.hints.framebuffer.depthBits = 24;
+        // Intercept the game's request for the depth buffer.
+        // Ignore what it asks for ("value") and force it to 16.
+        _glfw.hints.framebuffer.depthBits = 16;
         return;
     }
 
     if (hint == GLFW_STENCIL_BITS)
     {
-        // Request an 8-bit stencil buffer to enable the packed format.
-        // If the game doesn't need a stencil buffer, this is still generally
-        // more compatible and performant than separate buffers.
-        _glfw.hints.framebuffer.stencilBits = 8;
+        // Intercept the game's request for the stencil buffer.
+        // Ignore what it asks for ("value") and force it to 0 (disabled).
+        _glfw.hints.framebuffer.stencilBits = 0;
         return;
     }
-    // --- END POWERVR OPTIMIZATION ---
 
     _GLFW_REQUIRE_INIT();
 
@@ -346,6 +340,74 @@ GLFWAPI void glfwWindowHint(int hint, int value)
     }
 
     _glfwInputError(GLFW_INVALID_ENUM, "Invalid window hint 0x%08X", hint);
+}
+
+GLFWAPI void glfwWindowHintString(int hint, const char* value)
+{
+    assert(value != NULL);
+
+    _GLFW_REQUIRE_INIT();
+
+    switch (hint)
+    {
+        case GLFW_COCOA_FRAME_NAME:
+            strncpy(_glfw.hints.window.ns.frameName, value,
+                    sizeof(_glfw.hints.window.ns.frameName) - 1);
+            return;
+        case GLFW_X11_CLASS_NAME:
+            strncpy(_glfw.hints.window.x11.className, value,
+                    sizeof(_glfw.hints.window.x11.className) - 1);
+            return;
+        case GLFW_X11_INSTANCE_NAME:
+            strncpy(_glfw.hints.window.x11.instanceName, value,
+                    sizeof(_glfw.hints.window.x11.instanceName) - 1);
+            return;
+        case GLFW_WAYLAND_APP_ID:
+            strncpy(_glfw.hints.window.wl.appId, value,
+                    sizeof(_glfw.hints.window.wl.appId) - 1);
+            return;
+    }
+
+    _glfwInputError(GLFW_INVALID_ENUM, "Invalid window hint string 0x%08X", hint);
+}
+
+GLFWAPI void glfwDestroyWindow(GLFWwindow* handle)
+{
+    _GLFW_REQUIRE_INIT();
+
+    _GLFWwindow* window = (_GLFWwindow*) handle;
+
+    // Allow closing of NULL (to match the behavior of free)
+    if (window == NULL)
+        return;
+
+    // Clear all callbacks to avoid exposing a half torn-down window object
+    memset(&window->callbacks, 0, sizeof(window->callbacks));
+
+    // The window's context must not be current on another thread when the
+    // window is destroyed
+    if (window == _glfwPlatformGetTls(&_glfw.contextSlot))
+        glfwMakeContextCurrent(NULL);
+
+    _glfw.platform.destroyWindow(window);
+
+    // Unlink window from global linked list
+    {
+        _GLFWwindow** prev = &_glfw.windowListHead;
+
+        while (*prev != window)
+            prev = &((*prev)->next);
+
+        *prev = window->next;
+    }
+
+    // Clear memory for preedit text
+    if (window->preedit.text)
+        _glfw_free(window->preedit.text);
+    if (window->preedit.blockSizes)
+        _glfw_free(window->preedit.blockSizes);
+    _glfw_free(window->title);
+    _glfw_free(window);
 }
 
 GLFWAPI int glfwWindowShouldClose(GLFWwindow* handle)
@@ -1046,4 +1108,3 @@ GLFWAPI void glfwPostEmptyEvent(void)
     _GLFW_REQUIRE_INIT();
     _glfw.platform.postEmptyEvent();
 }
-

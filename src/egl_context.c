@@ -365,8 +365,24 @@ static void swapBuffersEGL(_GLFWwindow* window)
         g_zomdroid_surface.is_dirty = false;
 
         _glfw.zomdroid.aNativeWindow = g_zomdroid_surface.native_window;
-        _glfw.zomdroid.aNativeWindowWidth = g_zomdroid_surface.width;
-        _glfw.zomdroid.aNativeWindowHeight = g_zomdroid_surface.height;
+
+        // --- ORIENTATION FIX ---
+        // Force landscape orientation by ensuring width is the larger dimension.
+        // This corrects the sideways rendering issue on Android.
+        int raw_width = g_zomdroid_surface.width;
+        int raw_height = g_zomdroid_surface.height;
+
+        if (raw_height > raw_width)
+        {
+            _glfw.zomdroid.aNativeWindowWidth = raw_height;
+            _glfw.zomdroid.aNativeWindowHeight = raw_width;
+        }
+        else
+        {
+            _glfw.zomdroid.aNativeWindowWidth = raw_width;
+            _glfw.zomdroid.aNativeWindowHeight = raw_height;
+        }
+        // --- END ORIENTATION FIX ---
 
         pthread_mutex_unlock(&g_zomdroid_surface.mutex);
         pthread_cond_signal(&g_zomdroid_surface.ready_for_destroy_cond);
@@ -405,26 +421,19 @@ static void swapBuffersEGL(_GLFWwindow* window)
 #endif
 
     // --- POWERVR OPTIMIZATION ---
-    // Discarding the depth and stencil attachments before swapping is a
-    // huge performance gain on tile-based deferred rendering (TBDR) GPUs
-    // as it avoids writing their contents from tile memory back to main memory.
-    // We check for the extension string in the current context.
-    if (_glfwStringInExtensionString("GL_EXT_discard_framebuffer",
-                                     (const char*) glGetString(GL_EXTENSIONS)))
+    if (window->context.GetString &&
+        _glfwStringInExtensionString("GL_EXT_discard_framebuffer",
+                                     (const char*) window->context.GetString(GL_EXTENSIONS)))
     {
-        // Define the attachments to discard.
-        const GLenum attachments[] = { GL_DEPTH_EXT, GL_STENCIL_EXT };
+        const GLenum attachments[] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
 
-        // Define the function pointer type.
-        typedef void (APIENTRY * PFNGLDISCARDFRAMEBUFFEREXTPROC) (GLenum target, GLsizei numAttachments, const GLenum *attachments);
+        typedef void (APIENTRY * PFNGLDISCARDFRAMEBUFFEREXTPROC) (GLenum, GLsizei, const GLenum*);
 
-        // Get the function pointer from the EGL context.
         PFNGLDISCARDFRAMEBUFFEREXTPROC glDiscardFramebufferEXT =
-            (PFNGLDISCARDFRAMEBUFFEREXTPROC) eglGetProcAddress("glDiscardFramebufferEXT");
+                (PFNGLDISCARDFRAMEBUFFEREXTPROC) eglGetProcAddress("glDiscardFramebufferEXT");
 
         if (glDiscardFramebufferEXT)
         {
-            // Discard the depth and stencil buffers.
             glDiscardFramebufferEXT(GL_FRAMEBUFFER, 2, attachments);
         }
     }
@@ -1116,4 +1125,3 @@ GLFWAPI EGLConfig glfwGetEGLConfig(GLFWwindow* handle)
 
     return window->context.egl.config;
 }
-

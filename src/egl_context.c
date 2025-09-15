@@ -404,6 +404,32 @@ static void swapBuffersEGL(_GLFWwindow* window)
     if (_glfw.zomdroid.aNativeWindow == NULL) { return; }
 #endif
 
+    // --- POWERVR OPTIMIZATION ---
+    // Discarding the depth and stencil attachments before swapping is a
+    // huge performance gain on tile-based deferred rendering (TBDR) GPUs
+    // as it avoids writing their contents from tile memory back to main memory.
+    // We check for the extension string in the current context.
+    if (_glfwStringInExtensionString("GL_EXT_discard_framebuffer",
+                                     (const char*) glGetString(GL_EXTENSIONS)))
+    {
+        // Define the attachments to discard.
+        const GLenum attachments[] = { GL_DEPTH_EXT, GL_STENCIL_EXT };
+
+        // Define the function pointer type.
+        typedef void (APIENTRY * PFNGLDISCARDFRAMEBUFFEREXTPROC) (GLenum target, GLsizei numAttachments, const GLenum *attachments);
+
+        // Get the function pointer from the EGL context.
+        PFNGLDISCARDFRAMEBUFFEREXTPROC glDiscardFramebufferEXT =
+            (PFNGLDISCARDFRAMEBUFFEREXTPROC) eglGetProcAddress("glDiscardFramebufferEXT");
+
+        if (glDiscardFramebufferEXT)
+        {
+            // Discard the depth and stencil buffers.
+            glDiscardFramebufferEXT(GL_FRAMEBUFFER, 2, attachments);
+        }
+    }
+    // --- END POWERVR OPTIMIZATION ---
+
     eglSwapBuffers(_glfw.egl.display, window->context.egl.surface);
 }
 

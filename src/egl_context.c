@@ -77,6 +77,61 @@ static const char* getEGLErrorString(EGLint error)
     }
 }
 
+// Helper function to detect PowerVR GPU
+//
+static GLFWbool isPowerVRGPU(void)
+{
+    static int isPowerVR = -1; // -1 = not checked, 0 = not PowerVR, 1 = is PowerVR
+
+    if (isPowerVR != -1)
+        return isPowerVR;
+
+    // Check environment variable to force PowerVR optimizations
+    char* env = getenv("GLFW_POWERVR_OPTIMIZE");
+    if (env)
+    {
+        isPowerVR = (strcmp(env, "1") == 0 || strcmp(env, "true") == 0) ? 1 : 0;
+        return isPowerVR;
+    }
+
+    // On Zomdroid platform, assume PowerVR by default (can be common on Android)
+#if defined(_GLFW_ZOMDROID)
+    isPowerVR = 1;
+#else
+    isPowerVR = 0;
+#endif
+
+    return isPowerVR;
+}
+
+// PowerVR-optimized config scoring
+//
+static int scorePowerVRConfig(const _GLFWfbconfig* config)
+{
+    int score = 0;
+
+    // Prefer packed depth-stencil formats (most efficient on TBDR)
+    if (config->depthBits == 24 && config->stencilBits == 8)
+        score += 100;
+
+    // Standard 8888 color format works well
+    if (config->redBits == 8 && config->greenBits == 8 &&
+        config->blueBits == 8 && config->alphaBits == 8)
+        score += 50;
+
+    // RGB565 is also efficient on PowerVR for non-alpha content
+    if (config->redBits == 5 && config->greenBits == 6 &&
+        config->blueBits == 5 && config->alphaBits == 0)
+        score += 40;
+
+    // Avoid accumulation buffers (not used on modern TBDR)
+    if (config->accumRedBits == 0 && config->accumGreenBits == 0 &&
+        config->accumBlueBits == 0 && config->accumAlphaBits == 0)
+        score += 20;
+
+    return score;
+}
+
 // Returns the specified attribute of the specified EGLConfig
 //
 static int getEGLConfigAttrib(EGLConfig config, int attrib)
@@ -212,6 +267,22 @@ static GLFWbool chooseEGLConfig(const _GLFWctxconfig* ctxconfig,
 
         u->handle = (uintptr_t) n;
         usableCount++;
+    }
+
+    // PowerVR optimization: Boost score for TBDR-friendly configs
+    if (isPowerVRGPU())
+    {
+        for (i = 0; i < usableCount; i++)
+        {
+            int powervrScore = scorePowerVRConfig(&usableConfigs[i]);
+            // Reduce sample count penalty for PowerVR (TBDR handles MSAA efficiently)
+            if (usableConfigs[i].samples > 0)
+                powervrScore += 10;
+
+            // Store PowerVR score in a way that influences selection
+            // (This is a heuristic boost to prefer PowerVR-optimal configs)
+            usableConfigs[i].samples += (powervrScore / 10);
+        }
     }
 
     closest = _glfwChooseFBConfig(fbconfig, usableConfigs, usableCount);
@@ -420,24 +491,70 @@ static void swapBuffersEGL(_GLFWwindow* window)
     if (_glfw.zomdroid.aNativeWindow == NULL) { return; }
 #endif
 
-    // --- POWERVR OPTIMIZATION ---
-    if (window->context.GetString &&
-        _glfwStringInExtensionString("GL_EXT_discard_framebuffer",
-                                     (const char*) window->context.GetString(GL_EXTENSIONS)))
+    // --- ENHANCED POWERVR OPTIMIZATION ---
+    // PowerVR uses Tile-Based Deferred Rendering (TBDR), where discarding
+    // framebuffer attachments prevents expensive tile memory writebacks.
+    if (isPowerVRGPU() && window->context.GetString)
     {
-        const GLenum attachments[] = { GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT };
+        const char* extensions = (const char*) window->context.GetString(GL_EXTENSIONS);
 
-        typedef void (APIENTRY * PFNGLDISCARDFRAMEBUFFEREXTPROC) (GLenum, GLsizei, const GLenum*);
+        // Check for GL_EXT_discard_framebuffer (common on PowerVR)
+        if (_glfwStringInExtensionString("GL_EXT_discard_framebuffer", extensions))
+        {
+            GLenum attachments[4];
+            GLsizei numAttachments = 0;
 
-        PFNGLDISCARDFRAMEBUFFEREXTPROC glDiscardFramebufferEXT =
+            typedef void (APIENTRY * PFNGLDISCARDFRAMEBUFFEREXTPROC) (GLenum, GLsizei, const GLenum*);
+            PFNGLDISCARDFRAMEBUFFEREXTPROC glDiscardFramebufferEXT =
                 (PFNGLDISCARDFRAMEBUFFEREXTPROC) eglGetProcAddress("glDiscardFramebufferEXT");
 
-        if (glDiscardFramebufferEXT)
+            if (glDiscardFramebufferEXT)
+            {
+                // Always discard depth and stencil (they're typically not needed after swap)
+                attachments[numAttachments++] = GL_DEPTH_ATTACHMENT;
+                attachments[numAttachments++] = GL_STENCIL_ATTACHMENT;
+
+                // Check if we should discard color attachments
+                // (only if GLFW_POWERVR_DISCARD_COLOR is set - generally not recommended)
+                char* discardColor = getenv("GLFW_POWERVR_DISCARD_COLOR");
+                if (discardColor && strcmp(discardColor, "1") == 0)
+                {
+                    attachments[numAttachments++] = GL_COLOR_ATTACHMENT0;
+                }
+
+                glDiscardFramebufferEXT(GL_FRAMEBUFFER, numAttachments, attachments);
+
+                // Log if debugging is enabled
+                char* debugEnv = getenv("GLFW_POWERVR_DEBUG");
+                if (debugEnv && strcmp(debugEnv, "1") == 0)
+                {
+                    static int logOnce = 0;
+                    if (logOnce == 0)
+                    {
+                        printf("GLFW PowerVR: Discarding %d framebuffer attachment(s) per frame\n", numAttachments);
+                        logOnce = 1;
+                    }
+                }
+            }
+        }
+        // Check for GL_IMG_multisampled_render_to_texture (PowerVR-specific)
+        else if (_glfwStringInExtensionString("GL_IMG_multisampled_render_to_texture", extensions))
         {
-            glDiscardFramebufferEXT(GL_FRAMEBUFFER, 2, attachments);
+            // This extension handles MSAA resolve efficiently on PowerVR
+            // No explicit discard needed, but we can log it
+            char* debugEnv = getenv("GLFW_POWERVR_DEBUG");
+            if (debugEnv && strcmp(debugEnv, "1") == 0)
+            {
+                static int logOnce = 0;
+                if (logOnce == 0)
+                {
+                    printf("GLFW PowerVR: Using GL_IMG_multisampled_render_to_texture\n");
+                    logOnce = 1;
+                }
+            }
         }
     }
-    // --- END POWERVR OPTIMIZATION ---
+    // --- END ENHANCED POWERVR OPTIMIZATION ---
 
     eglSwapBuffers(_glfw.egl.display, window->context.egl.surface);
 }
@@ -883,6 +1000,43 @@ GLFWbool _glfwCreateContextEGL(_GLFWwindow* window,
 
         SET_ATTRIB(EGL_WIDTH, width);
         SET_ATTRIB(EGL_HEIGHT, height);
+    }
+
+    // PowerVR-specific surface optimizations
+    if (isPowerVRGPU())
+    {
+        // On PowerVR TBDR GPUs, EGL_BUFFER_DESTROYED is more efficient than
+        // EGL_BUFFER_PRESERVED because it allows the driver to discard tile memory
+        // without writing back to main memory. This is the default but we set it
+        // explicitly for documentation purposes.
+        #ifdef EGL_SWAP_BEHAVIOR
+        char* preserveBuffer = getenv("GLFW_POWERVR_PRESERVE_BUFFER");
+        if (!preserveBuffer || strcmp(preserveBuffer, "1") != 0)
+        {
+            SET_ATTRIB(EGL_SWAP_BEHAVIOR, EGL_BUFFER_DESTROYED);
+        }
+        #endif
+
+        // Enable IMG context priority if available (PowerVR-specific)
+        #ifdef EGL_IMG_context_priority
+        const char* extensions = eglQueryString(_glfw.egl.display, EGL_EXTENSIONS);
+        if (extensions && _glfwStringInExtensionString("EGL_IMG_context_priority", extensions))
+        {
+            char* priority = getenv("GLFW_POWERVR_CONTEXT_PRIORITY");
+            if (priority && strcmp(priority, "high") == 0)
+            {
+                #ifdef EGL_CONTEXT_PRIORITY_HIGH_IMG
+                SET_ATTRIB(EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_HIGH_IMG);
+                #endif
+            }
+            else if (priority && strcmp(priority, "medium") == 0)
+            {
+                #ifdef EGL_CONTEXT_PRIORITY_MEDIUM_IMG
+                SET_ATTRIB(EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_MEDIUM_IMG);
+                #endif
+            }
+        }
+        #endif
     }
 
     SET_ATTRIB(EGL_NONE, EGL_NONE);

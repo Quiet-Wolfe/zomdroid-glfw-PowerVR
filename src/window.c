@@ -306,17 +306,34 @@ GLFWAPI void glfwWindowHint(int hint, int value)
     // This intercepts the game's request for depth and stencil bits.
     // We force a 24-bit depth and 8-bit stencil buffer. This encourages the
     // EGL driver to select a packed GL_DEPTH24_STENCIL8_OES format, which is
-    // very efficient on PowerVR and should solve the visual corruption.
-    if (hint == GLFW_DEPTH_BITS)
+    // very efficient on PowerVR TBDR GPUs and prevents visual corruption.
+    //
+    // This optimization can be disabled by setting the environment variable:
+    // GLFW_POWERVR_FORCE_DEPTH_STENCIL=0
+    static int checkEnv = 1;
+    static int forceDepthStencil = 1;
+
+    if (checkEnv)
     {
-        _glfw.hints.framebuffer.depthBits = 24;
-        return;
+        char* env = getenv("GLFW_POWERVR_FORCE_DEPTH_STENCIL");
+        if (env && strcmp(env, "0") == 0)
+            forceDepthStencil = 0;
+        checkEnv = 0;
     }
 
-    if (hint == GLFW_STENCIL_BITS)
+    if (forceDepthStencil)
     {
-        _glfw.hints.framebuffer.stencilBits = 8;
-        return;
+        if (hint == GLFW_DEPTH_BITS)
+        {
+            _glfw.hints.framebuffer.depthBits = 24;
+            return;
+        }
+
+        if (hint == GLFW_STENCIL_BITS)
+        {
+            _glfw.hints.framebuffer.stencilBits = 8;
+            return;
+        }
     }
     // --- END POWERVR OPTIMIZATION ---
 

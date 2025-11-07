@@ -110,19 +110,20 @@ static int scorePowerVRConfig(const _GLFWfbconfig* config)
 {
     int score = 0;
 
+    // CRITICAL: PowerVR requires RGBA8888 for FBO support
+    // RGB565 and RGB888 often fail with GL_FRAMEBUFFER_UNSUPPORTED
+    if (config->redBits == 8 && config->greenBits == 8 &&
+        config->blueBits == 8 && config->alphaBits == 8)
+        score += 1000;  // Very strong preference for RGBA8888
+    else if (config->alphaBits == 0)
+        score -= 500;   // Penalize RGB formats (FBO incompatible)
+
     // Prefer packed depth-stencil formats (most efficient on TBDR)
     if (config->depthBits == 24 && config->stencilBits == 8)
         score += 100;
-
-    // Standard 8888 color format works well
-    if (config->redBits == 8 && config->greenBits == 8 &&
-        config->blueBits == 8 && config->alphaBits == 8)
+    // Also accept depth-only or separate depth+stencil
+    else if (config->depthBits == 16 || config->depthBits == 24)
         score += 50;
-
-    // RGB565 is also efficient on PowerVR for non-alpha content
-    if (config->redBits == 5 && config->greenBits == 6 &&
-        config->blueBits == 5 && config->alphaBits == 0)
-        score += 40;
 
     // Avoid accumulation buffers (not used on modern TBDR)
     if (config->accumRedBits == 0 && config->accumGreenBits == 0 &&
@@ -269,19 +270,58 @@ static GLFWbool chooseEGLConfig(const _GLFWctxconfig* ctxconfig,
         usableCount++;
     }
 
-    // PowerVR optimization: Boost score for TBDR-friendly configs
+    // PowerVR optimization: Filter and prioritize TBDR-friendly configs
     if (isPowerVRGPU())
     {
+        int bestPowerVRScore = -1000000;
+        int bestPowerVRIndex = -1;
+
+        // Find the best PowerVR config
         for (i = 0; i < usableCount; i++)
         {
             int powervrScore = scorePowerVRConfig(&usableConfigs[i]);
+
             // Reduce sample count penalty for PowerVR (TBDR handles MSAA efficiently)
             if (usableConfigs[i].samples > 0)
                 powervrScore += 10;
 
-            // Store PowerVR score in a way that influences selection
-            // (This is a heuristic boost to prefer PowerVR-optimal configs)
-            usableConfigs[i].samples += (powervrScore / 10);
+            if (powervrScore > bestPowerVRScore)
+            {
+                bestPowerVRScore = powervrScore;
+                bestPowerVRIndex = i;
+            }
+        }
+
+        // If we found a good PowerVR config, prioritize it
+        if (bestPowerVRIndex >= 0 && bestPowerVRScore > 0)
+        {
+            // Move the best PowerVR config to the front
+            if (bestPowerVRIndex != 0)
+            {
+                EGLConfig tempNative = nativeConfigs[bestPowerVRIndex];
+                _GLFWfbconfig tempUsable = usableConfigs[bestPowerVRIndex];
+
+                // Shift everything down
+                for (i = bestPowerVRIndex; i > 0; i--)
+                {
+                    nativeConfigs[i] = nativeConfigs[i-1];
+                    usableConfigs[i] = usableConfigs[i-1];
+                }
+
+                nativeConfigs[0] = tempNative;
+                usableConfigs[0] = tempUsable;
+            }
+
+            // Log the selected config for debugging
+            char* debugEnv = getenv("GLFW_POWERVR_DEBUG");
+            if (debugEnv && strcmp(debugEnv, "1") == 0)
+            {
+                printf("GLFW PowerVR: Selected config - R:%d G:%d B:%d A:%d D:%d S:%d (score: %d)\n",
+                       usableConfigs[0].redBits, usableConfigs[0].greenBits,
+                       usableConfigs[0].blueBits, usableConfigs[0].alphaBits,
+                       usableConfigs[0].depthBits, usableConfigs[0].stencilBits,
+                       bestPowerVRScore);
+            }
         }
     }
 

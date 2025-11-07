@@ -473,7 +473,7 @@ static void applyPowerVROptimizations(_GLFWwindow* window)
     char* debugEnv = getenv("GLFW_POWERVR_DEBUG");
     int debug = debugEnv && strcmp(debugEnv, "1") == 0;
 
-    // 1. Enable texture compression (PowerVR has excellent PVRTC support)
+    // 1. Enable texture compression and performance hints
     typedef void (APIENTRY *PFNGLHINTPROC)(GLenum target, GLenum mode);
     PFNGLHINTPROC glHint_fn = (PFNGLHINTPROC) window->context.getProcAddress("glHint");
 
@@ -482,11 +482,32 @@ static void applyPowerVROptimizations(_GLFWwindow* window)
         // Prefer quality for texture compression
         glHint_fn(GL_GENERATE_MIPMAP_HINT, GL_NICEST);
 
+        // Signal that we want fastest rendering (may help governor boost frequency)
+        #ifndef GL_FRAGMENT_SHADER_DERIVATIVE_HINT
+        #define GL_FRAGMENT_SHADER_DERIVATIVE_HINT 0x8B8B
+        #endif
+        glHint_fn(GL_FRAGMENT_SHADER_DERIVATIVE_HINT, GL_NICEST);
+
         if (debug)
-            printf("GLFW PowerVR: Applied GL hints for quality\n");
+            printf("GLFW PowerVR: Applied GL hints for quality and performance\n");
     }
 
-    // 2. Check for PowerVR-specific extensions
+    // 2. Trigger GPU frequency scaling hints
+    // On some Android devices, rendering a small workload can signal the governor
+    // This is a harmless way to "wake up" the GPU to higher frequencies
+    typedef void (APIENTRY *PFNGLFINISHPROC)(void);
+    PFNGLFINISHPROC glFinish_fn = (PFNGLFINISHPROC) window->context.getProcAddress("glFinish");
+
+    if (glFinish_fn)
+    {
+        // Force GPU to process commands - signals active workload to governor
+        glFinish_fn();
+
+        if (debug)
+            printf("GLFW PowerVR: Sent initial workload signal to GPU governor\n");
+    }
+
+    // 3. Check for PowerVR-specific extensions
     if (_glfwStringInExtensionString("GL_IMG_shader_binary", extensions))
     {
         if (debug)
@@ -505,11 +526,25 @@ static void applyPowerVROptimizations(_GLFWwindow* window)
             printf("GLFW PowerVR: IMG multisampled render to texture available (efficient MSAA)\n");
     }
 
-    // 3. Log discard framebuffer support
+    // 4. Log discard framebuffer support
     if (_glfwStringInExtensionString("GL_EXT_discard_framebuffer", extensions))
     {
         if (debug)
             printf("GLFW PowerVR: Discard framebuffer extension available (will use for tile memory optimization)\n");
+    }
+
+    // 5. Display detected GPU info
+    if (debug)
+    {
+        const char* renderer = (const char*) window->context.GetString(GL_RENDERER);
+        const char* vendor = (const char*) window->context.GetString(GL_VENDOR);
+        const char* version = (const char*) window->context.GetString(GL_VERSION);
+
+        printf("GLFW PowerVR: GPU Info:\n");
+        printf("  Vendor: %s\n", vendor);
+        printf("  Renderer: %s\n", renderer);
+        printf("  Version: %s\n", version);
+        printf("  High-priority context requested for maximum GPU frequency\n");
     }
 
     optimizationsApplied = 1;
@@ -1159,6 +1194,53 @@ GLFWbool _glfwCreateContextEGL(_GLFWwindow* window,
         }
     }
 
+    // PowerVR: Request high-priority context to boost GPU frequency
+    if (isPowerVRGPU())
+    {
+        const char* extensions = eglQueryString(_glfw.egl.display, EGL_EXTENSIONS);
+
+        // EGL_IMG_context_priority - PowerVR-specific extension
+        // This hints to the driver/governor that high performance is needed
+        if (extensions && _glfwStringInExtensionString("EGL_IMG_context_priority", extensions))
+        {
+            char* priorityEnv = getenv("GLFW_POWERVR_CONTEXT_PRIORITY");
+            int useHighPriority = 1; // Default to high priority
+
+            if (priorityEnv)
+            {
+                if (strcmp(priorityEnv, "low") == 0)
+                    useHighPriority = 0;
+                else if (strcmp(priorityEnv, "medium") == 0)
+                    useHighPriority = -1; // Use medium
+            }
+
+            if (useHighPriority == 1)
+            {
+                // Request HIGH priority - signals to governor to boost GPU clock
+                #ifndef EGL_CONTEXT_PRIORITY_LEVEL_IMG
+                #define EGL_CONTEXT_PRIORITY_LEVEL_IMG 0x3100
+                #endif
+                #ifndef EGL_CONTEXT_PRIORITY_HIGH_IMG
+                #define EGL_CONTEXT_PRIORITY_HIGH_IMG 0x3101
+                #endif
+                SET_ATTRIB(EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_HIGH_IMG);
+
+                char* debugEnv = getenv("GLFW_POWERVR_DEBUG");
+                if (debugEnv && strcmp(debugEnv, "1") == 0)
+                {
+                    printf("GLFW PowerVR: Context priority set to HIGH (GPU frequency boost requested)\n");
+                }
+            }
+            else if (useHighPriority == -1)
+            {
+                #ifndef EGL_CONTEXT_PRIORITY_MEDIUM_IMG
+                #define EGL_CONTEXT_PRIORITY_MEDIUM_IMG 0x3102
+                #endif
+                SET_ATTRIB(EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_MEDIUM_IMG);
+            }
+        }
+    }
+
     SET_ATTRIB(EGL_NONE, EGL_NONE);
 
     window->context.egl.handle = eglCreateContext(_glfw.egl.display,
@@ -1214,26 +1296,8 @@ GLFWbool _glfwCreateContextEGL(_GLFWwindow* window,
         }
         #endif
 
-        // Enable IMG context priority if available (PowerVR-specific)
-        #ifdef EGL_IMG_context_priority
-        const char* extensions = eglQueryString(_glfw.egl.display, EGL_EXTENSIONS);
-        if (extensions && _glfwStringInExtensionString("EGL_IMG_context_priority", extensions))
-        {
-            char* priority = getenv("GLFW_POWERVR_CONTEXT_PRIORITY");
-            if (priority && strcmp(priority, "high") == 0)
-            {
-                #ifdef EGL_CONTEXT_PRIORITY_HIGH_IMG
-                SET_ATTRIB(EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_HIGH_IMG);
-                #endif
-            }
-            else if (priority && strcmp(priority, "medium") == 0)
-            {
-                #ifdef EGL_CONTEXT_PRIORITY_MEDIUM_IMG
-                SET_ATTRIB(EGL_CONTEXT_PRIORITY_LEVEL_IMG, EGL_CONTEXT_PRIORITY_MEDIUM_IMG);
-                #endif
-            }
-        }
-        #endif
+        // Note: Context priority is now set during context creation
+        // (see context creation code above for EGL_IMG_context_priority)
     }
 
     SET_ATTRIB(EGL_NONE, EGL_NONE);
